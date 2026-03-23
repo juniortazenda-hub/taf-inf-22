@@ -1,10 +1,10 @@
 # taf-inf-22
 devellopement backend d'une API pour gerer un blog simple
-# 📝 Blog API - Projet INF222
+Blog API - Projet INF222
 
 API RESTful pour la gestion d'un blog, développée avec **Node.js**, **Express** et **SQLite**.
 
-## 📋 Table des matières
+Table des matières
 
 - [Prérequis](#prérequis)
 - [Installation](#installation)
@@ -15,22 +15,22 @@ API RESTful pour la gestion d'un blog, développée avec **Node.js**, **Express*
 - [Documentation Swagger](#documentation-swagger)
 - [Codes HTTP](#codes-http)
 
-## 🔧 Prérequis
+ Prérequis
 
 - **Node.js** (version 16 ou supérieure)
 - **npm** (inclus avec Node.js)
 
-## 🚀 Installation
+ Installation
 
 \`\`\`bash
 # 1. Cloner le projet
 git clone <url-du-repo>
 cd blog-api-inf222
 
-# 2. Installer les dépendances
+2. Installer les dépendances
 npm install
 
-# 3. Démarrer le serveur
+ 3. Démarrer le serveur
 npm run dev    # Mode développement (avec rechargement automatique)
 # ou
 npm start      # Mode production
@@ -38,7 +38,7 @@ npm start      # Mode production
 
 Le serveur démarre sur **http://localhost:3000**
 
-## 📁 Structure du projet
+Structure du projet
 
 \`\`\`
 blog-api-inf222/
@@ -59,7 +59,7 @@ blog-api-inf222/
 └── README.md
 \`\`\`
 
-## 🔌 Endpoints de l'API
+ Endpoints de l'API
 
 | Méthode  | Endpoint                        | Description                   |
 |----------|---------------------------------|-------------------------------|
@@ -80,9 +80,9 @@ blog-api-inf222/
 | limit     | number | Nombre max de résultats    |
 | offset    | number | Décalage (pagination)      |
 
-## 📝 Exemples de requêtes
+ Exemples de requêtes
 
-### Créer un article
+ Créer un article
 \`\`\`bash
 curl -X POST http://localhost:3000/api/articles \\
   -H "Content-Type: application/json" \\
@@ -94,7 +94,7 @@ curl -X POST http://localhost:3000/api/articles \\
   }'
 \`\`\`
 
-### Lister les articles
+ Lister les articles
 \`\`\`bash
 curl http://localhost:3000/api/articles
 curl http://localhost:3000/api/articles?auteur=Jean
@@ -118,12 +118,12 @@ curl -X PUT http://localhost:3000/api/articles/1 \\
 curl -X DELETE http://localhost:3000/api/articles/1
 \`\`\`
 
-## 📖 Documentation Swagger
+ Documentation Swagger
 
 Accédez à la documentation interactive :  
-👉 **http://localhost:3000/api-docs**
+ **http://localhost:3000/api-docs**
 
-## 📊 Codes HTTP
+ Codes HTTP
 
 | Code | Signification            | Utilisation                        |
 |------|--------------------------|------------------------------------|
@@ -133,7 +133,7 @@ Accédez à la documentation interactive :
 | 404  | Not Found                | Ressource non trouvée              |
 | 500  | Internal Server Error    | Erreur serveur interne             |
 
-## 🛠 Technologies utilisées
+ Technologies utilisées
 
 - **Express.js** - Framework web
 - **better-sqlite3** - Base de données SQLite
