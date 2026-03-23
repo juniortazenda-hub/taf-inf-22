@@ -1,0 +1,1117 @@
+// ============ package.json ============
+{
+  "name": "blog-api-inf222",
+  "version": "1.0.0",
+  "description": "API RESTful de Blog - Projet INF222",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "echo \"Aucun test configuré\" && exit 0"
+  },
+  "keywords": ["blog", "api", "express", "sqlite"],
+  "author": "Étudiant INF222",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "better-sqlite3": "^9.4.3",
+    "cors": "^2.8.5",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.0",
+    "express-validator": "^7.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
+
+// ============ src/server.js ============
+const express = require('express');
+const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
+const articleRoutes = require('./routes/articleRoutes');
+const { initDatabase } = require('./models/database');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ============================================
+// Middlewares
+// ============================================
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ============================================
+// Documentation Swagger
+// ============================================
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: 'Blog API - Documentation'
+}));
+
+// ============================================
+// Routes
+// ============================================
+app.use('/api/articles', articleRoutes);
+
+// Route racine
+app.get('/', (req, res) => {
+  res.json({
+    message: 'Bienvenue sur l\'API Blog - INF222',
+    version: '1.0.0',
+    documentation: `http://localhost:${PORT}/api-docs`,
+    endpoints: {
+      articles: `http://localhost:${PORT}/api/articles`,
+      search: `http://localhost:${PORT}/api/articles/search?query=...`
+    }
+  });
+});
+
+// ============================================
+// Gestion des erreurs globales
+// ============================================
+app.use((err, req, res, next) => {
+  console.error('Erreur serveur:', err.stack);
+  res.status(500).json({
+    success: false,
+    message: 'Erreur interne du serveur',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// Route 404
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route ${req.method} ${req.url} non trouvée`
+  });
+});
+
+// ============================================
+// Initialisation et démarrage
+// ============================================
+initDatabase();
+
+app.listen(PORT, () => {
+  console.log(`
+  ╔══════════════════════════════════════════╗
+  ║   Blog API - INF222                      ║
+  ║   Serveur démarré sur le port ${PORT}       ║
+  ║   Documentation: http://localhost:${PORT}/api-docs  ║
+  ╚══════════════════════════════════════════╝
+  `);
+});
+
+module.exports = app;
+
+// ============ src/models/database.js ============
+const Database = require('better-sqlite3');
+const path = require('path');
+
+// Chemin vers le fichier de base de données
+const DB_PATH = path.join(__dirname, '../../data/blog.db');
+
+let db;
+
+/**
+ * Obtenir l'instance de la base de données
+ * @returns {Database} Instance de la base de données SQLite
+ */
+function getDatabase() {
+  if (!db) {
+    const fs = require('fs');
+    const dataDir = path.join(__dirname, '../../data');
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    db = new Database(DB_PATH);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+  }
+  return db;
+}
+
+/**
+ * Initialiser la base de données et créer les tables
+ */
+function initDatabase() {
+  const database = getDatabase();
+
+  // Créer la table des articles
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS articles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      titre VARCHAR(255) NOT NULL,
+      contenu TEXT NOT NULL,
+      auteur VARCHAR(100) NOT NULL,
+      date_publication DATETIME DEFAULT CURRENT_TIMESTAMP,
+      date_modification DATETIME DEFAULT CURRENT_TIMESTAMP,
+      tags TEXT DEFAULT '[]',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Créer les index pour optimiser les recherches
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_articles_auteur ON articles(auteur);
+    CREATE INDEX IF NOT EXISTS idx_articles_date ON articles(date_publication);
+    CREATE INDEX IF NOT EXISTS idx_articles_titre ON articles(titre);
+  `);
+
+  console.log('✅ Base de données initialisée avec succès');
+}
+
+/**
+ * Fermer la connexion à la base de données
+ */
+function closeDatabase() {
+  if (db) {
+    db.close();
+    db = null;
+    console.log('🔒 Connexion à la base de données fermée');
+  }
+}
+
+module.exports = {
+  getDatabase,
+  initDatabase,
+  closeDatabase
+};
+
+// ============ src/models/Article.js ============
+const { getDatabase } = require('./database');
+
+class Article {
+  /**
+   * Créer un nouvel article
+   * @param {Object} articleData - Données de l'article
+   * @returns {Object} Article créé avec son ID
+   */
+  static create(articleData) {
+    const db = getDatabase();
+    const { titre, contenu, auteur, tags = [] } = articleData;
+    const date_publication = articleData.date_publication || new Date().toISOString();
+    const tagsJson = JSON.stringify(tags);
+
+    const stmt = db.prepare(`
+      INSERT INTO articles (titre, contenu, auteur, date_publication, tags)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+
+    const result = stmt.run(titre, contenu, auteur, date_publication, tagsJson);
+
+    return {
+      id: result.lastInsertRowid,
+      titre,
+      contenu,
+      auteur,
+      date_publication,
+      tags,
+      created_at: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Récupérer tous les articles avec filtres optionnels
+   * @param {Object} filters - Filtres (auteur, date, tag)
+   * @returns {Array} Liste des articles
+   */
+  static findAll(filters = {}) {
+    const db = getDatabase();
+    let query = 'SELECT * FROM articles WHERE 1=1';
+    const params = [];
+
+    // Filtre par auteur
+    if (filters.auteur) {
+      query += ' AND auteur LIKE ?';
+      params.push(`%${filters.auteur}%`);
+    }
+
+    // Filtre par date (format: YYYY-MM-DD)
+    if (filters.date) {
+      query += ' AND DATE(date_publication) = ?';
+      params.push(filters.date);
+    }
+
+    // Filtre par tag
+    if (filters.tag) {
+      query += ' AND tags LIKE ?';
+      params.push(`%${filters.tag}%`);
+    }
+
+    // Tri par date de publication (plus récent en premier)
+    query += ' ORDER BY date_publication DESC';
+
+    // Pagination
+    if (filters.limit) {
+      query += ' LIMIT ?';
+      params.push(parseInt(filters.limit));
+    }
+    if (filters.offset) {
+      query += ' OFFSET ?';
+      params.push(parseInt(filters.offset));
+    }
+
+    const articles = db.prepare(query).all(...params);
+
+    // Parser les tags JSON pour chaque article
+    return articles.map(article => ({
+      ...article,
+      tags: JSON.parse(article.tags || '[]')
+    }));
+  }
+
+  /**
+   * Récupérer un article par son ID
+   * @param {number} id - ID de l'article
+   * @returns {Object|null} Article trouvé ou null
+   */
+  static findById(id) {
+    const db = getDatabase();
+    const article = db.prepare('SELECT * FROM articles WHERE id = ?').get(id);
+
+    if (!article) return null;
+
+    return {
+      ...article,
+      tags: JSON.parse(article.tags || '[]')
+    };
+  }
+
+  /**
+   * Mettre à jour un article
+   * @param {number} id - ID de l'article
+   * @param {Object} updateData - Données à mettre à jour
+   * @returns {Object|null} Article mis à jour ou null
+   */
+  static update(id, updateData) {
+    const db = getDatabase();
+
+    // Vérifier que l'article existe
+    const existing = this.findById(id);
+    if (!existing) return null;
+
+    const fields = [];
+    const values = [];
+
+    // Construire dynamiquement la requête de mise à jour
+    if (updateData.titre !== undefined) {
+      fields.push('titre = ?');
+      values.push(updateData.titre);
+    }
+    if (updateData.contenu !== undefined) {
+      fields.push('contenu = ?');
+      values.push(updateData.contenu);
+    }
+    if (updateData.auteur !== undefined) {
+      fields.push('auteur = ?');
+      values.push(updateData.auteur);
+    }
+    if (updateData.date_publication !== undefined) {
+      fields.push('date_publication = ?');
+      values.push(updateData.date_publication);
+    }
+    if (updateData.tags !== undefined) {
+      fields.push('tags = ?');
+      values.push(JSON.stringify(updateData.tags));
+    }
+
+    // Toujours mettre à jour la date de modification
+    fields.push('date_modification = ?');
+    fields.push('updated_at = ?');
+    const now = new Date().toISOString();
+    values.push(now, now);
+
+    if (fields.length === 2) {
+      // Aucun champ à mettre à jour (seulement les dates)
+      return existing;
+    }
+
+    values.push(id);
+
+    const query = `UPDATE articles SET ${fields.join(', ')} WHERE id = ?`;
+    db.prepare(query).run(...values);
+
+    return this.findById(id);
+  }
+
+  /**
+   * Supprimer un article
+   * @param {number} id - ID de l'article
+   * @returns {boolean} true si supprimé, false sinon
+   */
+  static delete(id) {
+    const db = getDatabase();
+    const result = db.prepare('DELETE FROM articles WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  /**
+   * Rechercher des articles par texte
+   * @param {string} query - Texte à rechercher
+   * @returns {Array} Articles correspondants
+   */
+  static search(query) {
+    const db = getDatabase();
+    const searchTerm = `%${query}%`;
+
+    const articles = db.prepare(`
+      SELECT * FROM articles
+      WHERE titre LIKE ? OR contenu LIKE ?
+      ORDER BY date_publication DESC
+    `).all(searchTerm, searchTerm);
+
+    return articles.map(article => ({
+      ...article,
+      tags: JSON.parse(article.tags || '[]')
+    }));
+  }
+
+  /**
+   * Compter le nombre total d'articles
+   * @returns {number} Nombre total d'articles
+   */
+  static count() {
+    const db = getDatabase();
+    const result = db.prepare('SELECT COUNT(*) as total FROM articles').get();
+    return result.total;
+  }
+}
+
+module.exports = Article;
+
+// ============ src/controllers/articleController.js ============
+const Article = require('../models/Article');
+const { validationResult } = require('express-validator');
+
+/**
+ * Contrôleur pour la gestion des articles du blog
+ */
+const articleController = {
+
+  /**
+   * POST /api/articles
+   * Créer un nouvel article
+   */
+  create: (req, res) => {
+    try {
+      // Vérifier les erreurs de validation
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Erreurs de validation',
+          errors: errors.array().map(err => ({
+            champ: err.path,
+            message: err.msg
+          }))
+        });
+      }
+
+      const { titre, contenu, auteur, date_publication, tags } = req.body;
+
+      const article = Article.create({
+        titre: titre.trim(),
+        contenu: contenu.trim(),
+        auteur: auteur.trim(),
+        date_publication,
+        tags: tags || []
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Article créé avec succès',
+        data: article
+      });
+
+    } catch (error) {
+      console.error('Erreur lors de la création:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la création de l\'article',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * GET /api/articles
+   * Récupérer tous les articles (avec filtres optionnels)
+   */
+  getAll: (req, res) => {
+    try {
+      const { auteur, date, tag, limit, offset } = req.query;
+
+      const articles = Article.findAll({
+        auteur,
+        date,
+        tag,
+        limit: limit ? parseInt(limit) : undefined,
+        offset: offset ? parseInt(offset) : undefined
+      });
+
+      const total = Article.count();
+
+      res.status(200).json({
+        success: true,
+        message: 'Articles récupérés avec succès',
+        data: articles,
+        meta: {
+          total,
+          count: articles.length,
+          filtres: {
+            auteur: auteur || null,
+            date: date || null,
+            tag: tag || null
+          }
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur lors de la récupération:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la récupération des articles',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * GET /api/articles/search?query=...
+   * Rechercher des articles par texte
+   */
+  search: (req, res) => {
+    try {
+      const { query } = req.query;
+
+      if (!query || query.trim() === '') {
+        return res.status(400).json({
+          success: false,
+          message: 'Le paramètre "query" est requis pour la recherche'
+        });
+      }
+
+      const articles = Article.search(query.trim());
+
+      res.status(200).json({
+        success: true,
+        message: `${articles.length} article(s) trouvé(s) pour "${query}"`,
+        data: articles,
+        meta: {
+          query: query.trim(),
+          resultats: articles.length
+        }
+      });
+
+    } catch (error) {
+      console.error('Erreur lors de la recherche:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la recherche',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * GET /api/articles/:id
+   * Récupérer un article par son ID
+   */
+  getById: (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Validation de l'ID
+      if (!id || isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID invalide. L\'ID doit être un nombre entier.'
+        });
+      }
+
+      const article = Article.findById(parseInt(id));
+
+      if (!article) {
+        return res.status(404).json({
+          success: false,
+          message: `Article avec l'ID ${id} non trouvé`
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Article récupéré avec succès',
+        data: article
+      });
+
+    } catch (error) {
+      console.error('Erreur lors de la récupération:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la récupération de l\'article',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * PUT /api/articles/:id
+   * Mettre à jour un article
+   */
+  update: (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Validation de l'ID
+      if (!id || isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID invalide. L\'ID doit être un nombre entier.'
+        });
+      }
+
+      // Vérifier les erreurs de validation
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({
+          success: false,
+          message: 'Erreurs de validation',
+          errors: errors.array().map(err => ({
+            champ: err.path,
+            message: err.msg
+          }))
+        });
+      }
+
+      const updateData = {};
+      const { titre, contenu, auteur, date_publication, tags } = req.body;
+
+      if (titre !== undefined) updateData.titre = titre.trim();
+      if (contenu !== undefined) updateData.contenu = contenu.trim();
+      if (auteur !== undefined) updateData.auteur = auteur.trim();
+      if (date_publication !== undefined) updateData.date_publication = date_publication;
+      if (tags !== undefined) updateData.tags = tags;
+
+      const article = Article.update(parseInt(id), updateData);
+
+      if (!article) {
+        return res.status(404).json({
+          success: false,
+          message: `Article avec l'ID ${id} non trouvé`
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Article mis à jour avec succès',
+        data: article
+      });
+
+    } catch (error) {
+      console.error('Erreur lors de la mise à jour:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la mise à jour de l\'article',
+        error: error.message
+      });
+    }
+  },
+
+  /**
+   * DELETE /api/articles/:id
+   * Supprimer un article
+   */
+  delete: (req, res) => {
+    try {
+      const { id } = req.params;
+
+      // Validation de l'ID
+      if (!id || isNaN(id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID invalide. L\'ID doit être un nombre entier.'
+        });
+      }
+
+      const deleted = Article.delete(parseInt(id));
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          message: `Article avec l'ID ${id} non trouvé`
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: `Article avec l'ID ${id} supprimé avec succès`
+      });
+
+    } catch (error) {
+      console.error('Erreur lors de la suppression:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la suppression de l\'article',
+        error: error.message
+      });
+    }
+  }
+};
+
+module.exports = articleController;
+
+// ============ src/routes/articleRoutes.js ============
+const express = require('express');
+const router = express.Router();
+const { body } = require('express-validator');
+const articleController = require('../controllers/articleController');
+
+// ============================================
+// Règles de validation
+// ============================================
+const validateCreateArticle = [
+  body('titre')
+    .notEmpty().withMessage('Le titre est obligatoire')
+    .isLength({ min: 3, max: 255 }).withMessage('Le titre doit contenir entre 3 et 255 caractères')
+    .trim(),
+
+  body('contenu')
+    .notEmpty().withMessage('Le contenu est obligatoire')
+    .isLength({ min: 10 }).withMessage('Le contenu doit contenir au moins 10 caractères')
+    .trim(),
+
+  body('auteur')
+    .notEmpty().withMessage('L\'auteur est obligatoire')
+    .isLength({ min: 2, max: 100 }).withMessage('L\'auteur doit contenir entre 2 et 100 caractères')
+    .trim(),
+
+  body('tags')
+    .optional()
+    .isArray().withMessage('Les tags doivent être un tableau'),
+
+  body('date_publication')
+    .optional()
+    .isISO8601().withMessage('La date doit être au format ISO 8601 (ex: 2024-01-15)')
+];
+
+const validateUpdateArticle = [
+  body('titre')
+    .optional()
+    .isLength({ min: 3, max: 255 }).withMessage('Le titre doit contenir entre 3 et 255 caractères')
+    .trim(),
+
+  body('contenu')
+    .optional()
+    .isLength({ min: 10 }).withMessage('Le contenu doit contenir au moins 10 caractères')
+    .trim(),
+
+  body('auteur')
+    .optional()
+    .isLength({ min: 2, max: 100 }).withMessage('L\'auteur doit contenir entre 2 et 100 caractères')
+    .trim(),
+
+  body('tags')
+    .optional()
+    .isArray().withMessage('Les tags doivent être un tableau'),
+
+  body('date_publication')
+    .optional()
+    .isISO8601().withMessage('La date doit être au format ISO 8601')
+];
+
+// ============================================
+// Routes
+// ============================================
+
+/**
+ * @swagger
+ * /api/articles/search:
+ *   get:
+ *     summary: Rechercher des articles
+ *     tags: [Articles]
+ *     parameters:
+ *       - in: query
+ *         name: query
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Texte à rechercher dans le titre ou le contenu
+ *     responses:
+ *       200:
+ *         description: Résultats de la recherche
+ *       400:
+ *         description: Paramètre query manquant
+ */
+router.get('/search', articleController.search);
+
+/**
+ * @swagger
+ * /api/articles:
+ *   get:
+ *     summary: Récupérer tous les articles
+ *     tags: [Articles]
+ *     parameters:
+ *       - in: query
+ *         name: auteur
+ *         schema:
+ *           type: string
+ *         description: Filtrer par auteur
+ *       - in: query
+ *         name: date
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filtrer par date (YYYY-MM-DD)
+ *       - in: query
+ *         name: tag
+ *         schema:
+ *           type: string
+ *         description: Filtrer par tag
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *         description: Nombre maximum d'articles
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *         description: Décalage pour la pagination
+ *     responses:
+ *       200:
+ *         description: Liste des articles
+ */
+router.get('/', articleController.getAll);
+
+/**
+ * @swagger
+ * /api/articles/{id}:
+ *   get:
+ *     summary: Récupérer un article par ID
+ *     tags: [Articles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         description: ID de l'article
+ *     responses:
+ *       200:
+ *         description: Article trouvé
+ *       404:
+ *         description: Article non trouvé
+ */
+router.get('/:id', articleController.getById);
+
+/**
+ * @swagger
+ * /api/articles:
+ *   post:
+ *     summary: Créer un nouvel article
+ *     tags: [Articles]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [titre, contenu, auteur]
+ *             properties:
+ *               titre:
+ *                 type: string
+ *                 example: "Mon premier article"
+ *               contenu:
+ *                 type: string
+ *                 example: "Contenu détaillé de l'article..."
+ *               auteur:
+ *                 type: string
+ *                 example: "Jean Dupont"
+ *               tags:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["tech", "web"]
+ *               date_publication:
+ *                 type: string
+ *                 format: date-time
+ *                 example: "2024-01-15T10:00:00Z"
+ *     responses:
+ *       201:
+ *         description: Article créé avec succès
+ *       400:
+ *         description: Erreurs de validation
+ */
+router.post('/', validateCreateArticle, articleController.create);
+
+/**
+ * @swagger
+ * /api/articles/{id}:
+ *   put:
+ *     summary: Mettre à jour un article
+ *     tags: [Articles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               titre:
+ *                 type: string
+ *               contenu:
+ *                 type: string
+ *               auteur:
+ *                 type: string
+ *               tags:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *     responses:
+ *       200:
+ *         description: Article mis à jour
+ *       404:
+ *         description: Article non trouvé
+ */
+router.put('/:id', validateUpdateArticle, articleController.update);
+
+/**
+ * @swagger
+ * /api/articles/{id}:
+ *   delete:
+ *     summary: Supprimer un article
+ *     tags: [Articles]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Article supprimé
+ *       404:
+ *         description: Article non trouvé
+ */
+router.delete('/:id', articleController.delete);
+
+module.exports = router;
+
+// ============ src/config/swagger.js ============
+const swaggerJsdoc = require('swagger-jsdoc');
+
+const options = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Blog API - INF222',
+      version: '1.0.0',
+      description: `
+## API RESTful de Blog
+
+Cette API permet de gérer un blog avec les fonctionnalités suivantes :
+- **CRUD complet** sur les articles
+- **Filtrage** par auteur, date et tags
+- **Recherche** textuelle dans les titres et contenus
+- **Pagination** des résultats
+
+### Codes HTTP utilisés
+| Code | Signification |
+|------|--------------|
+| 200  | Succès |
+| 201  | Ressource créée |
+| 400  | Requête invalide |
+| 404  | Ressource non trouvée |
+| 500  | Erreur serveur |
+      `,
+      contact: {
+        name: 'Étudiant INF222',
+        email: 'etudiant@universite.edu'
+      },
+      license: {
+        name: 'MIT',
+        url: 'https://opensource.org/licenses/MIT'
+      }
+    },
+    servers: [
+      {
+        url: 'http://localhost:3000',
+        description: 'Serveur de développement'
+      }
+    ],
+    tags: [
+      {
+        name: 'Articles',
+        description: 'Opérations CRUD sur les articles du blog'
+      }
+    ]
+  },
+  apis: ['./src/routes/*.js']
+};
+
+const swaggerSpec = swaggerJsdoc(options);
+
+module.exports = swaggerSpec;
+
+// ============ README.md ============
+# 📝 Blog API - Projet INF222
+
+API RESTful pour la gestion d'un blog, développée avec **Node.js**, **Express** et **SQLite**.
+
+## 📋 Table des matières
+
+- [Prérequis](#prérequis)
+- [Installation](#installation)
+- [Démarrage](#démarrage)
+- [Structure du projet](#structure-du-projet)
+- [Endpoints de l'API](#endpoints-de-lapi)
+- [Exemples de requêtes](#exemples-de-requêtes)
+- [Documentation Swagger](#documentation-swagger)
+- [Codes HTTP](#codes-http)
+
+## 🔧 Prérequis
+
+- **Node.js** (version 16 ou supérieure)
+- **npm** (inclus avec Node.js)
+
+## 🚀 Installation
+
+\`\`\`bash
+# 1. Cloner le projet
+git clone <url-du-repo>
+cd blog-api-inf222
+
+# 2. Installer les dépendances
+npm install
+
+# 3. Démarrer le serveur
+npm run dev    # Mode développement (avec rechargement automatique)
+# ou
+npm start      # Mode production
+\`\`\`
+
+Le serveur démarre sur **http://localhost:3000**
+
+## 📁 Structure du projet
+
+\`\`\`
+blog-api-inf222/
+├── src/
+│   ├── server.js              # Point d'entrée principal
+│   ├── config/
+│   │   └── swagger.js         # Configuration Swagger
+│   ├── controllers/
+│   │   └── articleController.js # Logique métier
+│   ├── models/
+│   │   ├── database.js        # Configuration SQLite
+│   │   └── Article.js         # Modèle Article (CRUD)
+│   └── routes/
+│       └── articleRoutes.js   # Définition des routes
+├── data/
+│   └── blog.db                # Base de données SQLite (auto-générée)
+├── package.json
+└── README.md
+\`\`\`
+
+## 🔌 Endpoints de l'API
+
+| Méthode  | Endpoint                        | Description                   |
+|----------|---------------------------------|-------------------------------|
+| \`POST\`   | \`/api/articles\`                 | Créer un article              |
+| \`GET\`    | \`/api/articles\`                 | Lister tous les articles      |
+| \`GET\`    | \`/api/articles/:id\`             | Récupérer un article par ID   |
+| \`PUT\`    | \`/api/articles/:id\`             | Modifier un article           |
+| \`DELETE\` | \`/api/articles/:id\`             | Supprimer un article          |
+| \`GET\`    | \`/api/articles/search?query=...\`| Rechercher des articles       |
+
+### Filtres disponibles (GET /api/articles)
+
+| Paramètre | Type   | Description                |
+|-----------|--------|----------------------------|
+| auteur    | string | Filtrer par nom d'auteur   |
+| date      | string | Filtrer par date (YYYY-MM-DD) |
+| tag       | string | Filtrer par tag            |
+| limit     | number | Nombre max de résultats    |
+| offset    | number | Décalage (pagination)      |
+
+## 📝 Exemples de requêtes
+
+### Créer un article
+\`\`\`bash
+curl -X POST http://localhost:3000/api/articles \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "titre": "Introduction à Node.js",
+    "contenu": "Node.js est un environnement d\'exécution JavaScript côté serveur...",
+    "auteur": "Jean Dupont",
+    "tags": ["nodejs", "javascript", "backend"]
+  }'
+\`\`\`
+
+### Lister les articles
+\`\`\`bash
+curl http://localhost:3000/api/articles
+curl http://localhost:3000/api/articles?auteur=Jean
+curl http://localhost:3000/api/articles?date=2024-01-15
+\`\`\`
+
+### Rechercher
+\`\`\`bash
+curl http://localhost:3000/api/articles/search?query=Node.js
+\`\`\`
+
+### Modifier un article
+\`\`\`bash
+curl -X PUT http://localhost:3000/api/articles/1 \\
+  -H "Content-Type: application/json" \\
+  -d '{ "titre": "Titre modifié" }'
+\`\`\`
+
+### Supprimer un article
+\`\`\`bash
+curl -X DELETE http://localhost:3000/api/articles/1
+\`\`\`
+
+## 📖 Documentation Swagger
+
+Accédez à la documentation interactive :
+👉 **http://localhost:3000/api-docs**
+
+## 📊 Codes HTTP
+
+| Code | Signification            | Utilisation                        |
+|------|--------------------------|------------------------------------|
+| 200  | OK                       | Requête réussie                    |
+| 201  | Created                  | Ressource créée avec succès        |
+| 400  | Bad Request              | Données invalides                  |
+| 404  | Not Found                | Ressource non trouvée              |
+| 500  | Internal Server Error    | Erreur serveur interne             |
+
+## 🛠 Technologies utilisées
+
+- **Express.js** - Framework web
+- **better-sqlite3** - Base de données SQLite
+- **express-validator** - Validation des entrées
+- **swagger-jsdoc + swagger-ui-express** - Documentation API
+- **cors** - Cross-Origin Resource Sharing
+- **nodemon** - Rechargement automatique en développement
+
+---
+
+*Projet réalisé dans le cadre du cours INF222*
+
+// ============ .gitignore ============
+node_modules/
+data/
+.env
+*.log
+.DS_Store
